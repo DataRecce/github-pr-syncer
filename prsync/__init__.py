@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 
 from github import Github, PullRequest
@@ -82,10 +83,10 @@ class GithubPrSyncer:
         else:
             push = True
 
-        # Copy all files in '.githubprsyncer/*' to the root of the repo and commit
+        # Copy all files in '.githubprsyncer/' to the root of the repo and commit
         if prsync_dir:
             print(f"Copying files from {prsync_dir}/ to the root of the {self.repo_path}/")
-            os.system(f'cp -r {prsync_dir}/* {self.repo_path}/')
+            shutil.copytree(prsync_dir, self.repo_path, dirs_exist_ok=True)
 
             # commit if there are changes
             self.local_repo.git.add('.')
@@ -132,9 +133,9 @@ class GithubPrSyncer:
                 path = os.path.join(self.repo_path, GITHUB_PR_SYNCER_DIR)
                 prsycn_dir = None
                 if os.path.exists(path):
-                    # copy the files from .githubprsyncer/* to the temp dir
-                    print(f"Copying files from {GITHUB_PR_SYNCER_DIR}/* to {temp_dir}/")
-                    os.system(f'cp -r {path}/* {temp_dir}/')
+                    # copy the files from .githubprsyncer/ to the temp dir
+                    print(f"Copying files from {path}/ to {temp_dir}/")
+                    shutil.copytree(path, temp_dir, dirs_exist_ok=True)
                     prsycn_dir = temp_dir
                     print()
 
