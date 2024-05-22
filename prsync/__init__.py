@@ -13,103 +13,118 @@ class GithubPrSyncer:
         github_repo,
         repo_path,
     ):
-        self.github = Github(os.getenv('GITHUB_TOKEN'))
-        if self.github is None:
+        github_token = os.getenv('GITHUB_TOKEN')
+        if github_token is None:
             raise ValueError('GITHUB_TOKEN is required')
 
+        self.github = Github(github_token)
         self.github_repo = self.github.get_repo(github_repo)
         if not self.github_repo.fork:
             raise ValueError(f'{github_repo} is not a fork')
         self.local_repo = git.Repo(repo_path)
         self.remote_name = 'origin'
-        self.remote_parent_name = self.github_repo.owner.login
         self.repo_path = repo_path
 
-    # def get_open_pull_requests(self, repository):
-    #     return repository.get_pulls(state='open')
+    def fetch_origin(self):
+        print("Fetching origin...")
+        self.local_repo.remotes[self.remote_name].fetch()
 
-    # def sync_default_branch(self):
-    #     branch = self.github_repo.parent.default_branch
-    #     self.local_repo.git.push(self.remote_name, f'refs/remotes/{self.remote_parent_name}/{branch}:refs/heads/{branch}', force=True)
-
-    # def fetch_remotes(self):
-    #     print(f"Fetching {self.remote_name}...")
-    #     self.local_repo.remotes[self.remote_name].fetch()
-    #     print(f"Fetching {self.remote_parent_name}...")
-    #     self.local_repo.remotes[self.remote_parent_name].fetch()
-
-    def sync_pull_request(self, pr: PullRequest, prsync_dir):
-        # format {owner}:{branch_name}
-        pr_from = f"{pr.head.user.login}:{pr.head.ref}"
-        pr_to = f"{pr.base.user.login}:{pr.base.ref}"
-        print(f"Syncing PR #{pr.number}: {pr.title}")
-        print(f"from {pr_from} to {pr_to}")
-
-        # Remote details
+    def checkout_and_reset_branch(self, owner_name, branch, synced_branch=None):
+        """
+        Checkout a branch and sync with the remote
+        """
         repo_name = self.github_repo.name
-        owner_name = pr.head.user.login
+
+        if owner_name == self.github_repo.owner.login:
+            raise ValueError(f'{owner_name} is the same as the owner of the forked repository')
+
+        if synced_branch is None:
+            synced_branch = f'{owner_name}/{branch}'
+
+        # Fetch the remote
         remote_name = f'remote_{owner_name}'
         remote_url = f'https://github.com/{owner_name}/{repo_name}.git'
-
-        # Check if the remote already exists, if not, add it
         if remote_name not in [remote.name for remote in self.local_repo.remotes]:
             print(f"Adding remote: {remote_name}")
             self.local_repo.create_remote(remote_name, remote_url)
-
-        # Fetch the branch from the remote
-        print(f"Fetch github repo: {owner_name}/{repo_name}")
+        print(f"Fetching remote {remote_name}...")
         self.local_repo.remotes[remote_name].fetch()
 
-        # Create and checkout a local branch
-        branch_name = f'{owner_name}/{pr.head.ref}'
-        if branch_name not in self.local_repo.heads:
-            print(f"Creating local branch: {branch_name}")
-            self.local_repo.create_head(branch_name, f'{remote_name}/{pr.head.ref}')
-            self.local_repo.git.checkout(branch_name)
+        # Check if the branch exists, if not, create it
+        remote_branch = f'{remote_name}/{branch}'
+        print(f"Checkout branch {synced_branch} from {remote_branch}")
+        if synced_branch not in self.local_repo.heads:
+            self.local_repo.create_head(synced_branch, f'{remote_name}/{branch}')
+            self.local_repo.git.checkout(synced_branch)
         else:
-            print(f"Branch {branch_name} already exists. Force to use the latest changes.")
-            self.local_repo.git.checkout(branch_name)
-            self.local_repo.git.reset('--hard', f'{self.remote_name}/{branch_name}')
+            self.local_repo.git.checkout(synced_branch)
+            self.local_repo.git.reset('--hard', remote_branch)
+        return synced_branch
+
+    def sync_default_branch(self):
+        parent_owner = self.github_repo.parent.owner.login
+        parant_default_branch = self.github_repo.parent.default_branch
+        self.checkout_and_reset_branch(parent_owner, parant_default_branch, parant_default_branch)
+        self.local_repo.git.push(self.remote_name, parant_default_branch, force=True)
+
+    def sync_pull_request(self, pr: PullRequest, prsync_dir):
+        # Checkout the latest commit of the owner branch
+        synced_branch = self.checkout_and_reset_branch(pr.head.user.login, pr.head.ref)
 
         # Check the behind and ahead commits
-        behind, ahead = self.local_repo.git.rev_list(f'{remote_name}/{pr.head.ref}...{branch_name}', '--left-right', '--count').split()
-        print(f"Branch {branch_name} is {behind} behind and {ahead} ahead. Syncing...")
+        remote_name = f'remote_{pr.head.user.login}'
+        behind, ahead = self.local_repo.git.rev_list(f'{remote_name}/{pr.head.ref}...{self.remote_name}/{synced_branch}', '--left-right', '--count').split()
+        print(f"Branch {synced_branch} is {behind} behind and {ahead} ahead.")
+        push = False
+        if behind == '0':
+            # up-to-date. checkout synced branch from the remote
+            self.local_repo.git.reset('--hard', f'{self.remote_name}/{synced_branch}')
+        else:
+            push = True
 
         # Copy all files in '.githubprsyncer/*' to the root of the repo and commit
         if prsync_dir:
             print(f"Copying files from {prsync_dir}/ to the root of the {self.repo_path}/")
             os.system(f'cp -r {prsync_dir}/* {self.repo_path}/')
-            self.local_repo.git.add('.')
+
             # commit if there are changes
+            self.local_repo.git.add('.')
             if self.local_repo.is_dirty():
+                print("New commit")
                 self.local_repo.git.commit('-m', f"Auto-sync by GithubPrSyncer")
+                push = True
             else:
                 print("No changes to commit. Skip committing.")
 
         # Push the branch to the remote
-        print(f"Pushing branch {branch_name} to remote...")
-        self.local_repo.git.push(self.remote_name, branch_name, force=True)
+        if push:
+            print(f"Pushing branch {synced_branch} to remote...")
+            self.local_repo.git.push(self.remote_name, synced_branch, force=True)
 
         # Create pull request
-        pulls = self.github_repo.get_pulls(state='open', head=f"{self.github_repo.owner.login}:{branch_name}")
+        pulls = self.github_repo.get_pulls(state='open', head=f"{self.github_repo.owner.login}:{synced_branch}")
         if pulls.totalCount > 0:
             print(f"PR: {pulls[0].html_url}")
-            pull_request = pulls[0]
+            synced_pr = pulls[0]
         else:
-            body = f"{pr.body}\n\nsynced from `{pr.html_url}`"
-            pull_request = self.github_repo.create_pull(title=f'[PRSync] {pr.title}', body=body, head=f"{branch_name}", base=self.github_repo.parent.default_branch)
-            print(f"New PR created: {pull_request.html_url}")
-        pull_request.set_labels('prsync')
+            if pr.body is None:
+                body = f"synced from `{pr.html_url}`"
+            else:
+                body = f"{pr.body}\n\nsynced from `{pr.html_url}`"
+            synced_pr = self.github_repo.create_pull(title=f'[PRSync] {pr.title}', body=body, head=f"{synced_branch}", base=self.github_repo.parent.default_branch)
+            print(f"New PR created: {synced_pr.html_url}")
+        synced_pr.set_labels('prsync')
 
-        return pull_request
+        return synced_pr
 
     def sync(self):
         # get the current branch
         current_branch = self.local_repo.active_branch
 
-        # create temp folder by python library
-        with tempfile.TemporaryDirectory() as temp_dir:
-            try:
+        try:
+            self.fetch_origin()
+
+            with tempfile.TemporaryDirectory() as temp_dir:
                 path = os.path.join(self.repo_path, GITHUB_PR_SYNCER_DIR)
                 prsycn_dir = None
                 if os.path.exists(path):
@@ -121,14 +136,22 @@ class GithubPrSyncer:
 
                 # sync the pull requests
                 open_pull_requests = self.github_repo.parent.get_pulls(state='open')
+                upstream_open_branches = []
                 for pr in open_pull_requests:
-                    if pr.number != 1144:
-                        continue
-
+                    print(f"Syncing PR: {pr.html_url}")
+                    branch_name = f'{pr.head.user.login}/{pr.head.ref}'
+                    upstream_open_branches.append(branch_name)
                     self.sync_pull_request(pr, prsycn_dir)
                     print()
 
-            finally:
-                # checkout back to the original branch
-                self.local_repo.git.checkout(current_branch)
+
+                # remove the pr not in synced PRs
+                prysync_prs = [pr for pr in self.github_repo.get_pulls(state='open') if 'prsync' in [label.name for label in pr.labels]]
+                for pr in prysync_prs:
+                    if pr.head.ref not in upstream_open_branches:
+                        print(f"Remove PR: {pr.head.ref} at {pr.html_url}")
+                        pr.edit(state='closed')
+        finally:
+            # checkout back to the original branch
+            self.local_repo.git.checkout(current_branch)
         
