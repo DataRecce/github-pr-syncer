@@ -119,7 +119,11 @@ class GithubPrSyncer:
 
     def sync(self):
         # get the current branch
-        current_branch = self.local_repo.active_branch
+        current_branch = None
+        try:
+            current_branch = self.local_repo.active_branch
+        except TypeError:
+            pass
 
         try:
             self.fetch_origin()
@@ -152,6 +156,6 @@ class GithubPrSyncer:
                         print(f"Remove PR: {pr.head.ref} at {pr.html_url}")
                         pr.edit(state='closed')
         finally:
-            # checkout back to the original branch
-            self.local_repo.git.checkout(current_branch)
+            if current_branch:
+                self.local_repo.git.checkout(current_branch)
         
