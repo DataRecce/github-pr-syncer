@@ -67,6 +67,8 @@ class GithubPrSyncer:
         parant_default_branch = self.github_repo.parent.default_branch
         self.checkout_and_reset_branch(parent_owner, parant_default_branch, parant_default_branch)
         self.local_repo.git.push(self.remote_name, parant_default_branch, force=True)
+        print(f"Pushing branch {parant_default_branch} to remote...")
+        print()
 
     def sync_pull_request(self, pr: PullRequest, prsync_dir):
         # Checkout the latest commit of the owner branch
@@ -130,8 +132,6 @@ class GithubPrSyncer:
             pass
 
         try:
-            self.fetch_origin()
-
             with tempfile.TemporaryDirectory() as temp_dir:
                 path = os.path.join(self.repo_path, GITHUB_PR_SYNCER_DIR)
                 prsycn_dir = None
@@ -141,6 +141,10 @@ class GithubPrSyncer:
                     shutil.copytree(path, temp_dir, dirs_exist_ok=True)
                     prsycn_dir = temp_dir
                     print()
+
+                # sync the default branches
+                self.fetch_origin()
+                self.sync_default_branch()
 
                 # sync the pull requests
                 open_pull_requests = self.github_repo.parent.get_pulls(state='open')
