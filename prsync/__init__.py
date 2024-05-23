@@ -73,13 +73,16 @@ class GithubPrSyncer:
         synced_branch = self.checkout_and_reset_branch(pr.head.user.login, pr.head.ref)
 
         # Check the behind and ahead commits
-        remote_name = f'remote_{pr.head.user.login}'
-        behind, ahead = self.local_repo.git.rev_list(f'{remote_name}/{pr.head.ref}...{self.remote_name}/{synced_branch}', '--left-right', '--count').split()
-        print(f"Branch {synced_branch} is {behind} behind and {ahead} ahead.")
         push = False
-        if behind == '0':
-            # up-to-date. checkout synced branch from the remote
-            self.local_repo.git.reset('--hard', f'{self.remote_name}/{synced_branch}')
+        if f'{self.remote_name}/{synced_branch}' in self.local_repo.heads:
+            remote_name = f'remote_{pr.head.user.login}'
+            behind, ahead = self.local_repo.git.rev_list(f'{remote_name}/{pr.head.ref}...{self.remote_name}/{synced_branch}', '--left-right', '--count').split()
+            print(f"Branch {synced_branch} is {behind} behind and {ahead} ahead.")
+            if behind == '0':
+                # up-to-date. checkout synced branch from the remote
+                self.local_repo.git.reset('--hard', f'{self.remote_name}/{synced_branch}')
+            else:
+                push = True
         else:
             push = True
 
