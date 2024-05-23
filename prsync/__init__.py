@@ -76,7 +76,8 @@ class GithubPrSyncer:
 
         # Check the behind and ahead commits
         push = False
-        if f'{self.remote_name}/{synced_branch}' in self.local_repo.heads:
+        remote_branches = [branch.name for branch in self.local_repo.remote().refs]
+        if f'{self.remote_name}/{synced_branch}' in remote_branches:
             remote_name = f'remote_{pr.head.user.login}'
             behind, ahead = self.local_repo.git.rev_list(f'{remote_name}/{pr.head.ref}...{self.remote_name}/{synced_branch}', '--left-right', '--count').split()
             print(f"Branch {synced_branch} is {behind} behind and {ahead} ahead.")
